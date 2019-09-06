@@ -505,6 +505,12 @@ type Checkpoint struct {
 	Name string // Name is the name of the checkpoint
 }
 
+// ExtraStorageOptions describes an extra storage
+type ExtraStorageOptions struct {
+	ExtraPath   string `json:"path,omitempty"`
+	MountSrcDev string `json:"device,omitempty"`
+}
+
 // Runtime describes an OCI runtime
 type Runtime struct {
 	Path string   `json:"path"`

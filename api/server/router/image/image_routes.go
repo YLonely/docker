@@ -34,11 +34,16 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 		repo     = r.Form.Get("repo")
 		tag      = r.Form.Get("tag")
 		message  = r.Form.Get("message")
+		useExtra bool
 		err      error
 		output   = ioutils.NewWriteFlusher(w)
 		platform *specs.Platform
 	)
 	defer output.Close()
+
+	if r.Form.Get("extra") != "" {
+		useExtra = true
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 
@@ -75,7 +80,7 @@ func (s *imageRouter) postImagesCreate(ctx context.Context, w http.ResponseWrite
 				authConfig = &types.AuthConfig{}
 			}
 		}
-		err = s.backend.PullImage(ctx, image, tag, platform, metaHeaders, authConfig, output)
+		err = s.backend.PullImage(ctx, image, tag, platform, metaHeaders, authConfig, output, useExtra)
 	} else { //import
 		src := r.Form.Get("fromSrc")
 		// 'err' MUST NOT be defined within this block, we need any error

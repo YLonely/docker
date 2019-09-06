@@ -17,7 +17,7 @@ import (
 // Store is an interface for creating and accessing images
 type Store interface {
 	Create(config []byte) (ID, error)
-	Get(id ID) (*Image, error)
+	Get(id ID, options *StoreGetOptions) (*Image, error)
 	Delete(id ID) ([]layer.Metadata, error)
 	Search(partialID string) (ID, error)
 	SetParent(id ID, parent ID) error
@@ -28,6 +28,11 @@ type Store interface {
 	Map() map[ID]*Image
 	Heads() map[ID]*Image
 	Len() int
+}
+
+// StoreGetOptions holds the options of store.get
+type StoreGetOptions struct {
+	UseExtraStorage bool
 }
 
 // LayerGetReleaser is a minimal interface for getting and releasing images.
@@ -43,19 +48,21 @@ type imageMeta struct {
 
 type store struct {
 	sync.RWMutex
-	lss       map[string]LayerGetReleaser
-	images    map[ID]*imageMeta
-	fs        StoreBackend
-	digestSet *digestset.Set
+	lss              map[string]LayerGetReleaser
+	images           map[ID]*imageMeta
+	fs               StoreBackend
+	digestSet        *digestset.Set
+	extraStoragePath string
 }
 
 // NewImageStore returns new store object for given set of layer stores
-func NewImageStore(fs StoreBackend, lss map[string]LayerGetReleaser) (Store, error) {
+func NewImageStore(fs StoreBackend, extraStoragePath string, lss map[string]LayerGetReleaser) (Store, error) {
 	is := &store{
-		lss:       lss,
-		images:    make(map[ID]*imageMeta),
-		fs:        fs,
-		digestSet: digestset.NewSet(),
+		lss:              lss,
+		images:           make(map[ID]*imageMeta),
+		fs:               fs,
+		digestSet:        digestset.NewSet(),
+		extraStoragePath: extraStoragePath,
 	}
 
 	// load all current images and retain layers
@@ -200,7 +207,7 @@ func (is *store) Search(term string) (ID, error) {
 	return IDFromDigest(dgst), nil
 }
 
-func (is *store) Get(id ID) (*Image, error) {
+func (is *store) Get(id ID, options *StoreGetOptions) (*Image, error) {
 	// todo: Check if image is in images
 	// todo: Detect manual insertions and start using them
 	config, err := is.fs.Get(id.Digest())
