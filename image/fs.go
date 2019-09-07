@@ -19,7 +19,7 @@ type DigestWalkFunc func(id digest.Digest) error
 // StoreBackend provides interface for image.Store persistence
 type StoreBackend interface {
 	Walk(f DigestWalkFunc) error
-	Get(id digest.Digest, options *StoreBackendOptions) ([]byte, error)
+	Get(id digest.Digest) ([]byte, error)
 	Set(data []byte) (digest.Digest, error)
 	Delete(id digest.Digest) error
 	SetMetadata(id digest.Digest, key string, data []byte) error
@@ -27,16 +27,10 @@ type StoreBackend interface {
 	DeleteMetadata(id digest.Digest, key string) error
 }
 
-// StoreBackendOptions holds params for metadata getting
-type StoreBackendOptions struct {
-	UseExtraStorage bool
-}
-
 // fs implements StoreBackend using the filesystem.
 type fs struct {
 	sync.RWMutex
-	root             string
-	extraStoragePath string
+	root string
 }
 
 const (
@@ -45,14 +39,13 @@ const (
 )
 
 // NewFSStoreBackend returns new filesystem based backend for image.Store
-func NewFSStoreBackend(root, extraStoragePath string) (StoreBackend, error) {
-	return newFSStore(root, extraStoragePath)
+func NewFSStoreBackend(root string) (StoreBackend, error) {
+	return newFSStore(root)
 }
 
-func newFSStore(root, extraStoragePath string) (*fs, error) {
+func newFSStore(root string) (*fs, error) {
 	s := &fs{
-		root:             root,
-		extraStoragePath: extraStoragePath,
+		root: root,
 	}
 	if err := os.MkdirAll(filepath.Join(root, contentDirName, string(digest.Canonical)), 0700); err != nil {
 		return nil, errors.Wrap(err, "failed to create storage backend")
@@ -63,20 +56,12 @@ func newFSStore(root, extraStoragePath string) (*fs, error) {
 	return s, nil
 }
 
-func (s *fs) contentFile(dgst digest.Digest, useExtraStorageAsRoot bool) string {
-	rootPath := s.root
-	if useExtraStorageAsRoot {
-		rootPath = s.extraStoragePath
-	}
-	return filepath.Join(rootPath, contentDirName, string(dgst.Algorithm()), dgst.Hex())
+func (s *fs) contentFile(dgst digest.Digest) string {
+	return filepath.Join(s.root, contentDirName, string(dgst.Algorithm()), dgst.Hex())
 }
 
-func (s *fs) metadataDir(dgst digest.Digest, useExtraStorageAsRoot bool) string {
-	rootPath := s.root
-	if useExtraStorageAsRoot {
-		rootPath = s.extraStoragePath
-	}
-	return filepath.Join(rootPath, metadataDirName, string(dgst.Algorithm()), dgst.Hex())
+func (s *fs) metadataDir(dgst digest.Digest) string {
+	return filepath.Join(s.root, metadataDirName, string(dgst.Algorithm()), dgst.Hex())
 }
 
 // Walk calls the supplied callback for each image ID in the storage backend.
@@ -102,42 +87,15 @@ func (s *fs) Walk(f DigestWalkFunc) error {
 }
 
 // Get returns the content stored under a given digest.
-func (s *fs) Get(dgst digest.Digest, options *StoreBackendOptions) ([]byte, error) {
+func (s *fs) Get(dgst digest.Digest) ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()
 
-	return s.get(dgst, options)
+	return s.get(dgst)
 }
 
-func (s *fs) get(dgst digest.Digest, opt *StoreBackendOptions) ([]byte, error) {
-	var content []byte
-	var err error
-	readOk := false
-	if opt.UseExtraStorage {
-		content, err = ioutil.ReadFile(s.contentFile(dgst, true))
-		readOk = true
-		if err == nil {
-			// if use extra storage and we get what we want,
-			// just make a symbol link from the extra dir
-			// Or we should make a symbol link for metadata dir?
-			extraPath := s.contentFile(dgst, true)
-			symPath := s.contentFile(dgst, false)
-			// do not create a symbol link if dir already exists.
-			_, err = os.Stat(symPath)
-			if os.IsNotExist(err) {
-				if err = os.Symlink(extraPath, symPath); err != nil {
-					return nil, errors.Wrapf(err, "cannot make symbol link for file %s", symPath)
-				}
-			} else if err != nil {
-				return nil, errors.Wrapf(err, "stat file failed %s", symPath)
-			}
-		}
-		// fallback to local dir
-	}
-	err = nil
-	if !readOk {
-		content, err = ioutil.ReadFile(s.contentFile(dgst, false))
-	}
+func (s *fs) get(dgst digest.Digest) ([]byte, error) {
+	content, err := ioutil.ReadFile(s.contentFile(dgst))
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get digest %s", dgst)
 	}
@@ -151,7 +109,6 @@ func (s *fs) get(dgst digest.Digest, opt *StoreBackendOptions) ([]byte, error) {
 }
 
 // Set stores content by checksum.
-// TODO: maybe we want to set content in the extra dir
 func (s *fs) Set(data []byte) (digest.Digest, error) {
 	s.Lock()
 	defer s.Unlock()
@@ -161,7 +118,7 @@ func (s *fs) Set(data []byte) (digest.Digest, error) {
 	}
 
 	dgst := digest.FromBytes(data)
-	if err := ioutils.AtomicWriteFile(s.contentFile(dgst, false), data, 0600); err != nil {
+	if err := ioutils.AtomicWriteFile(s.contentFile(dgst), data, 0600); err != nil {
 		return "", errors.Wrap(err, "failed to write digest data")
 	}
 
@@ -169,42 +126,40 @@ func (s *fs) Set(data []byte) (digest.Digest, error) {
 }
 
 // Delete removes content and metadata files associated with the digest.
-// Just delete the symbol link if the file is a link
 func (s *fs) Delete(dgst digest.Digest) error {
 	s.Lock()
 	defer s.Unlock()
 
-	if err := os.RemoveAll(s.metadataDir(dgst, false)); err != nil {
+	if err := os.RemoveAll(s.metadataDir(dgst)); err != nil {
 		return err
 	}
-	return os.Remove(s.contentFile(dgst, false))
+	return os.Remove(s.contentFile(dgst))
 }
 
 // SetMetadata sets metadata for a given ID. It fails if there's no base file.
 func (s *fs) SetMetadata(dgst digest.Digest, key string, data []byte) error {
 	s.Lock()
 	defer s.Unlock()
-	if _, err := s.get(dgst, &StoreBackendOptions{}); err != nil {
+	if _, err := s.get(dgst); err != nil {
 		return err
 	}
 
-	baseDir := filepath.Join(s.metadataDir(dgst, false))
+	baseDir := filepath.Join(s.metadataDir(dgst))
 	if err := os.MkdirAll(baseDir, 0700); err != nil {
 		return err
 	}
-	return ioutils.AtomicWriteFile(filepath.Join(s.metadataDir(dgst, false), key), data, 0600)
+	return ioutils.AtomicWriteFile(filepath.Join(s.metadataDir(dgst), key), data, 0600)
 }
 
 // GetMetadata returns metadata for a given digest.
-// Maybe leave GetMetadata unchanged?
 func (s *fs) GetMetadata(dgst digest.Digest, key string) ([]byte, error) {
 	s.RLock()
 	defer s.RUnlock()
 
-	if _, err := s.get(dgst, &StoreBackendOptions{}); err != nil {
+	if _, err := s.get(dgst); err != nil {
 		return nil, err
 	}
-	bytes, err := ioutil.ReadFile(filepath.Join(s.metadataDir(dgst, false), key))
+	bytes, err := ioutil.ReadFile(filepath.Join(s.metadataDir(dgst), key))
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read metadata")
 	}
@@ -216,5 +171,5 @@ func (s *fs) DeleteMetadata(dgst digest.Digest, key string) error {
 	s.Lock()
 	defer s.Unlock()
 
-	return os.RemoveAll(filepath.Join(s.metadataDir(dgst, false), key))
+	return os.RemoveAll(filepath.Join(s.metadataDir(dgst), key))
 }
