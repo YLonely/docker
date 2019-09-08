@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -328,6 +329,81 @@ func (ld *v2LayerDescriptor) Registered(diffID layer.DiffID) {
 	ld.V2MetadataService.Add(diffID, metadata.V2Metadata{Digest: ld.digest, SourceRepository: ld.repoInfo.Name.Name()})
 }
 
+type extraStorageLayerDescriptor struct {
+	v2LayerDescriptor
+	chainID          layer.ChainID
+	extraStoragePath string
+	driverName       string
+	localRoot        string
+}
+
+func (ed *extraStorageLayerDescriptor) localDriverPath() string {
+	return filepath.Join(ed.localRoot, ed.driverName)
+}
+
+func (ed *extraStorageLayerDescriptor) layerCacheIDPathInLocalDriver(cacheID string) string {
+	return filepath.Join(ed.localDriverPath(), cacheID)
+}
+
+func (ed *extraStorageLayerDescriptor) extraStorageLayerdbPath() string {
+	return filepath.Join(ed.extraStoragePath, "image", ed.driverName, "layerdb")
+}
+
+func (ed *extraStorageLayerDescriptor) extraStorageDriverPath() string {
+	return filepath.Join(ed.extraStoragePath, ed.driverName)
+}
+
+func (ed *extraStorageLayerDescriptor) layerCacheIDPathInExtraDriver(cacheID string) string {
+	return filepath.Join(ed.extraStorageDriverPath(), cacheID)
+}
+
+func (ed *extraStorageLayerDescriptor) readFileFromExtraLayerdb(chainID layer.ChainID, fileName string) (string, error) {
+	filePath := filepath.Join(ed.extraStorageLayerdbPath(), "sha256", chainID.String(), fileName)
+	res, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		logrus.Warn(err)
+		return "", err
+	}
+	return string(res), nil
+}
+
+func (ed *extraStorageLayerDescriptor) getLayerCacheIDInExtra(chainID layer.ChainID) (string, error) {
+	return ed.readFileFromExtraLayerdb(chainID, "cache-id")
+}
+
+func (ed *extraStorageLayerDescriptor) getLayerSizeInExtra(chainID layer.ChainID) (string, error) {
+	return ed.readFileFromExtraLayerdb(chainID, "size")
+}
+
+func (ed *extraStorageLayerDescriptor) getLayerDiffIDInExtra(chainID layer.ChainID) (string, error) {
+	return ed.readFileFromExtraLayerdb(chainID, "diff")
+}
+
+func (ed *extraStorageLayerDescriptor) Download(ctx context.Context, progressOutput progress.Output) (io.ReadCloser, int64, error) {
+	logrus.Debugf("trying to pulling from extra path:%s", ed.extraStoragePath)
+	progress.Update(progressOutput, ed.ID(), "Downloading from extra storage")
+	if cacheID, err := ed.getLayerCacheIDInExtra(ed.chainID); err == nil {
+		if size, err := ed.getLayerSizeInExtra(ed.chainID); err == nil {
+			if diffID, err := ed.getLayerDiffIDInExtra(ed.chainID); err == nil {
+				layerPathInExtra := ed.layerCacheIDPathInExtraDriver(cacheID)
+				if _, err = os.Stat(layerPathInExtra); err == nil {
+					layerPathInLocal := ed.layerCacheIDPathInLocalDriver(cacheID)
+					// make a symbol link here
+					if err = os.Symlink(layerPathInExtra, layerPathInLocal); err == nil {
+						progress.Update(progressOutput, ed.ID(), "Download from extra complete")
+						return ioutils.NewReadCloserWrapper(strings.NewReader(diffID+":"+cacheID+":"+size), func() error { return nil }), int64(len(cacheID)), nil
+					}
+					logrus.Warnf("cannot make symbol link for %s", layerPathInExtra)
+				}
+				logrus.Warnf("cannot find layer %s in extra driver home", layerPathInExtra)
+			}
+		}
+	}
+	logrus.Warn("fall back to pulling from registry")
+	progress.Update(progressOutput, ed.ID(), "Falling back to registry")
+	return ed.v2LayerDescriptor.Download(ctx, progressOutput)
+}
+
 func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named, platform *specs.Platform) (tagUpdated bool, err error) {
 	manSvc, err := p.repo.Manifests(ctx)
 	if err != nil {
@@ -560,8 +636,6 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 
 	target := mfst.Target()
 
-	// TODO: useExtraStorage?
-
 	if _, err := p.config.ImageStore.Get(target.Digest); err == nil {
 		// If the image already exists locally, no need to pull
 		// anything.
@@ -569,11 +643,13 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 	}
 
 	var descriptors []xfer.DownloadDescriptor
+	var v2Descriptors []v2LayerDescriptor
+	var extraDescriptors []extraStorageLayerDescriptor
 
 	// Note that the order of this loop is in the direction of bottom-most
 	// to top-most, so that the downloads slice gets ordered correctly.
 	for _, d := range mfst.Layers {
-		layerDescriptor := &v2LayerDescriptor{
+		layerDescriptor := v2LayerDescriptor{
 			digest:            d.Digest,
 			repo:              p.repo,
 			repoInfo:          p.repoInfo,
@@ -581,7 +657,27 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 			src:               d,
 		}
 
-		descriptors = append(descriptors, layerDescriptor)
+		v2Descriptors = append(v2Descriptors, layerDescriptor)
+	}
+
+	if p.config.ExtraPullConfig != nil {
+		localRoot := p.config.ExtraPullConfig.Root
+		extraDir := p.config.ExtraPullConfig.ExtraStorageDir
+		driverName := p.config.ExtraPullConfig.DriverName
+		for _, l := range v2Descriptors {
+			ld := extraStorageLayerDescriptor{v2LayerDescriptor: l, localRoot: localRoot, extraStoragePath: extraDir, driverName: driverName}
+			extraDescriptors = append(extraDescriptors, ld)
+		}
+		if err := generateChainID(&extraDescriptors); err != nil {
+			return "", "", err
+		}
+		for _, desc := range extraDescriptors {
+			descriptors = append(descriptors, &desc)
+		}
+	} else {
+		for _, desc := range v2Descriptors {
+			descriptors = append(descriptors, &desc)
+		}
 	}
 
 	configChan := make(chan []byte, 1)
@@ -984,4 +1080,17 @@ func toOCIPlatform(p manifestlist.PlatformSpec) specs.Platform {
 		OSFeatures:   p.OSFeatures,
 		OSVersion:    p.OSVersion,
 	}
+}
+
+func generateChainID(descriptors *[]extraStorageLayerDescriptor) error {
+	rootFS := *image.NewRootFS()
+	for _, des := range *descriptors {
+		diffID, err := des.DiffID()
+		if err != nil {
+			return err
+		}
+		rootFS.Append(diffID)
+		des.chainID = rootFS.ChainID()
+	}
+	return nil
 }

@@ -180,10 +180,16 @@ type CreateRWLayerOpts struct {
 	StorageOpt map[string]string
 }
 
+// RegisterOpts contains optional arguments to be passed to Register
+type RegisterOpts struct {
+	// indecate that the layer to be registered is from the extra storage.
+	ExtraStorageLayer bool
+}
+
 // Store represents a backend for managing both
 // read-only and read-write layers.
 type Store interface {
-	Register(io.Reader, ChainID) (Layer, error)
+	Register(io.Reader, ChainID, *RegisterOpts) (Layer, error)
 	Get(ChainID) (Layer, error)
 	Map() map[ChainID]Layer
 	Release(Layer) ([]Metadata, error)

@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/docker/distribution"
@@ -279,17 +281,45 @@ func (ls *layerStore) applyTar(tx *fileMetadataTransaction, ts io.Reader, parent
 	return nil
 }
 
-func (ls *layerStore) Register(ts io.Reader, parent ChainID) (Layer, error) {
-	return ls.registerWithDescriptor(ts, parent, distribution.Descriptor{})
+func (ls *layerStore) Register(ts io.Reader, parent ChainID, opts *RegisterOpts) (Layer, error) {
+	return ls.registerWithDescriptor(ts, parent, distribution.Descriptor{}, opts)
 }
 
-func (ls *layerStore) registerWithDescriptor(ts io.Reader, parent ChainID, descriptor distribution.Descriptor) (Layer, error) {
+func (ls *layerStore) registerWithDescriptor(ts io.Reader, parent ChainID, descriptor distribution.Descriptor, opts *RegisterOpts) (Layer, error) {
 	// err is used to hold the error which will always trigger
 	// cleanup of creates sources but may not be an error returned
 	// to the caller (already exists).
-	var err error
-	var pid string
-	var p *roLayer
+	var (
+		err        error
+		pid        string
+		p          *roLayer
+		extraLayer bool
+		diffID     DiffID
+		layerSize  int64
+	)
+
+	cacheID := stringid.GenerateRandomID()
+
+	if opts != nil {
+		extraLayer = opts.ExtraStorageLayer
+	}
+
+	if extraLayer {
+		// if the layer is from extra storage, the content of the ts are diffID, cacheID and size of the layer
+		res, err := ioutil.ReadAll(ts)
+		if err != nil {
+			logrus.Error("failed to read content from result")
+			return nil, err
+		}
+		parts := strings.Split(string(res), ":")
+		diffID = DiffID(digest.Digest(parts[0]))
+		cacheID = parts[1]
+		layerSize, err = strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			logrus.Errorf("cannot cast %s to type int64", parts[2])
+			return nil, err
+		}
+	}
 
 	if string(parent) != "" {
 		p = ls.get(parent)
@@ -314,7 +344,7 @@ func (ls *layerStore) registerWithDescriptor(ts io.Reader, parent ChainID, descr
 	// Create new roLayer
 	layer := &roLayer{
 		parent:         p,
-		cacheID:        stringid.GenerateRandomID(),
+		cacheID:        cacheID,
 		referenceCount: 1,
 		layerStore:     ls,
 		references:     map[Layer]struct{}{},
@@ -342,8 +372,13 @@ func (ls *layerStore) registerWithDescriptor(ts io.Reader, parent ChainID, descr
 		}
 	}()
 
-	if err = ls.applyTar(tx, ts, pid, layer); err != nil {
-		return nil, err
+	if extraLayer {
+		layer.size = layerSize
+		layer.diffID = diffID
+	} else {
+		if err = ls.applyTar(tx, ts, pid, layer); err != nil {
+			return nil, err
+		}
 	}
 
 	if layer.parent == nil {

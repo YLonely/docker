@@ -31,6 +31,7 @@ type containerStore interface {
 
 // ImageServiceConfig is the configuration used to create a new ImageService
 type ImageServiceConfig struct {
+	Root                      string
 	ContainerStore            containerStore
 	DistributionMetadataStore metadata.Store
 	EventsService             *daemonevents.Events
@@ -41,6 +42,13 @@ type ImageServiceConfig struct {
 	ReferenceStore            dockerreference.Store
 	RegistryService           registry.Service
 	TrustKey                  libtrust.PrivateKey
+	ExtraStorageConfig        *ExtraStorageConfig
+}
+
+// ExtraStorageConfig holds params for v2Puller to pull from extra dir
+type ExtraStorageConfig struct {
+	// dir path of the extra storage
+	ExtraStoragePath string
 }
 
 // NewImageService returns a new ImageService from a configuration
@@ -48,6 +56,7 @@ func NewImageService(config ImageServiceConfig) *ImageService {
 	logrus.Debugf("Max Concurrent Downloads: %d", config.MaxConcurrentDownloads)
 	logrus.Debugf("Max Concurrent Uploads: %d", config.MaxConcurrentUploads)
 	return &ImageService{
+		root:                      config.Root,
 		containers:                config.ContainerStore,
 		distributionMetadataStore: config.DistributionMetadataStore,
 		downloadManager:           xfer.NewLayerDownloadManager(config.LayerStores, config.MaxConcurrentDownloads),
@@ -58,11 +67,13 @@ func NewImageService(config ImageServiceConfig) *ImageService {
 		registryService:           config.RegistryService,
 		trustKey:                  config.TrustKey,
 		uploadManager:             xfer.NewLayerUploadManager(config.MaxConcurrentUploads),
+		extraStorageConfig:        config.ExtraStorageConfig,
 	}
 }
 
 // ImageService provides a backend for image management
 type ImageService struct {
+	root                      string
 	containers                containerStore
 	distributionMetadataStore metadata.Store
 	downloadManager           *xfer.LayerDownloadManager
@@ -74,6 +85,7 @@ type ImageService struct {
 	registryService           registry.Service
 	trustKey                  libtrust.PrivateKey
 	uploadManager             *xfer.LayerUploadManager
+	extraStorageConfig        *ExtraStorageConfig
 }
 
 // DistributionServices provides daemon image storage services

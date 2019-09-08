@@ -3,6 +3,7 @@ package images // import "github.com/docker/docker/daemon/images"
 import (
 	"context"
 	"io"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/docker/docker/registry"
 	"github.com/opencontainers/go-digest"
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/pkg/errors"
 )
 
 // PullImage initiates a pull operation. image is the repository name to pull, and
@@ -65,6 +67,14 @@ func (i *ImageService) pullImageWithReference(ctx context.Context, ref reference
 		close(writesDone)
 	}()
 
+	var extraPullConfig *distribution.ExtraPullConfig //nil
+	if useExtraStorage {
+		if i.extraStorageConfig == nil {
+			return errors.New("No extra storage options have been set")
+		}
+		extraPullConfig = &distribution.ExtraPullConfig{Root: i.root, ExtraStorageDir: i.extraStorageConfig.ExtraStoragePath, DriverName: i.layerStores[runtime.GOOS].DriverName()}
+	}
+
 	imagePullConfig := &distribution.ImagePullConfig{
 		Config: distribution.Config{
 			MetaHeaders:      metaHeaders,
@@ -79,7 +89,7 @@ func (i *ImageService) pullImageWithReference(ctx context.Context, ref reference
 		DownloadManager: i.downloadManager,
 		Schema2Types:    distribution.ImageTypes,
 		Platform:        platform,
-		UseExtraStorage: useExtraStorage,
+		ExtraPullConfig: extraPullConfig,
 	}
 
 	err := distribution.Pull(ctx, ref, imagePullConfig)

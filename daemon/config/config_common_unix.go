@@ -11,10 +11,10 @@ import (
 // CommonUnixConfig defines configuration of a docker daemon that is
 // common across Unix platforms.
 type CommonUnixConfig struct {
-	Runtimes          map[string]types.Runtime  `json:"runtimes,omitempty"`
-	DefaultRuntime    string                    `json:"default-runtime,omitempty"`
-	DefaultInitBinary string                    `json:"default-init,omitempty"`
-	ExtraStorage      types.ExtraStorageOptions `json:"extra-storage,omitempty"`
+	Runtimes          map[string]types.Runtime   `json:"runtimes,omitempty"`
+	DefaultRuntime    string                     `json:"default-runtime,omitempty"`
+	DefaultInitBinary string                     `json:"default-init,omitempty"`
+	ExtraStorage      *types.ExtraStorageOptions `json:"extra-storage,omitempty"`
 }
 
 type commonUnixBridgeConfig struct {

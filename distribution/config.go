@@ -62,8 +62,16 @@ type ImagePullConfig struct {
 	Schema2Types []string
 	// Platform is the requested platform of the image being pulled
 	Platform *specs.Platform
-	// UseExtraStorage specifies if image service should search the extra dir for images
-	UseExtraStorage bool
+
+	ExtraPullConfig *ExtraPullConfig
+}
+
+// ExtraPullConfig stores configs when pulling from extra storage
+type ExtraPullConfig struct {
+	// docker home dir
+	Root            string
+	ExtraStorageDir string
+	DriverName      string
 }
 
 // ImagePushConfig stores push configuration.

@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/docker/pkg/mount"
+
 	"github.com/docker/docker/pkg/fileutils"
 	"google.golang.org/grpc"
 
@@ -766,6 +768,12 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get the TempDir under %s: %s", config.Root, err)
 	}
+
+	extraDir, err := prepareExtraDir(config.Root, config.ExtraStorage, rootIDs)
+	if err != nil {
+		return nil, err
+	}
+
 	realTmp, err := fileutils.ReadSymlinkedDirectory(tmp)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to get the full path to the TempDir (%s): %s", tmp, err)
@@ -1037,10 +1045,16 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 
 	d.linkIndex = newLinkIndex()
 
+	var extraConfig *images.ExtraStorageConfig // nil
+	if extraDir != "" {
+		extraConfig = &images.ExtraStorageConfig{ExtraStoragePath: extraDir}
+	}
+
 	// TODO: imageStore, distributionMetadataStore, and ReferenceStore are only
 	// used above to run migration. They could be initialized in ImageService
 	// if migration is called from daemon/images. layerStore might move as well.
 	d.imageService = images.NewImageService(images.ImageServiceConfig{
+		Root:                      config.Root,
 		ContainerStore:            d.containers,
 		DistributionMetadataStore: distributionMetadataStore,
 		EventsService:             d.EventsService,
@@ -1051,7 +1065,8 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 		ReferenceStore:            rs,
 		RegistryService:           registryService,
 		TrustKey:                  trustKey,
-	})
+		ExtraStorageConfig:        extraConfig,
+	}
 
 	go d.execCommandGC()
 
@@ -1307,6 +1322,35 @@ func prepareTempDir(rootDir string, rootIdentity idtools.Identity) (string, erro
 	// We don't remove the content of tmpdir if it's not the default,
 	// it may hold things that do not belong to us.
 	return tmpDir, idtools.MkdirAllAndChown(tmpDir, 0700, rootIdentity)
+}
+
+// if config.ExtraStorage is not nil, prepareExtraDir will make a extra dir and mount the extra storage device
+// to the extra dir.
+func prepareExtraDir(rootDir string, opts *types.ExtraStorageOptions, rootIdentity idtools.Identity) (string, error) {
+	if opts == nil {
+		return "", nil
+	}
+	// make a default extra dir for opts
+	if opts.ExtraPath == "" {
+		opts.ExtraPath = filepath.Join(rootDir, "extra")
+	}
+	if err := idtools.MkdirAllAndChown(opts.ExtraPath, 0700, rootIdentity); err != nil {
+		logrus.Warnf("failed to make dir and change owner %s", opts.ExtraPath)
+		return "", err
+	}
+	if opts.MountSrcDev == "" {
+		return opts.ExtraPath, nil
+	}
+	// try umount here, just in case
+	if err := mount.Unmount(opts.ExtraPath); err != nil {
+		logrus.Warnf("failed to umount device in %s", opts.ExtraPath)
+		return "", err
+	}
+	if err := mount.Mount(opts.MountSrcDev, opts.ExtraPath, opts.DevType, ""); err != nil {
+		logrus.Warn("failed to mount device on extra dir")
+		return "", err
+	}
+	return opts.ExtraPath, nil
 }
 
 func (daemon *Daemon) setGenericResources(conf *config.Config) error {

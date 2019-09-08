@@ -509,6 +509,7 @@ type Checkpoint struct {
 type ExtraStorageOptions struct {
 	ExtraPath   string `json:"path,omitempty"`
 	MountSrcDev string `json:"device,omitempty"`
+	DevType     string `json:"type,omitempty"`
 }
 
 // Runtime describes an OCI runtime
