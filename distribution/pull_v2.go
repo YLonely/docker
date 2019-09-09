@@ -674,12 +674,12 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 		if err := generateChainID(&extraDescriptors); err != nil {
 			return "", "", err
 		}
-		for _, desc := range extraDescriptors {
-			descriptors = append(descriptors, &desc)
+		for i := range extraDescriptors {
+			descriptors = append(descriptors, &extraDescriptors[i])
 		}
 	} else {
-		for _, desc := range v2Descriptors {
-			descriptors = append(descriptors, &desc)
+		for i := range v2Descriptors {
+			descriptors = append(descriptors, &v2Descriptors[i])
 		}
 	}
 
