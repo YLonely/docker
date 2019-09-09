@@ -91,7 +91,7 @@ func (i *ImageService) ImportImage(src string, repository, os string, tag string
 	if err != nil {
 		return err
 	}
-	l, err := i.layerStores[os].Register(inflatedLayerData, "")
+	l, err := i.layerStores[os].Register(inflatedLayerData, "", nil)
 	if err != nil {
 		return err
 	}

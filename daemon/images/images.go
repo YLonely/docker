@@ -297,7 +297,7 @@ func (i *ImageService) SquashImage(id, parent string) (string, error) {
 	}
 	defer ts.Close()
 
-	newL, err := i.layerStores[img.OperatingSystem()].Register(ts, parentChainID)
+	newL, err := i.layerStores[img.OperatingSystem()].Register(ts, parentChainID, nil)
 	if err != nil {
 		return "", errors.Wrap(err, "error registering layer")
 	}

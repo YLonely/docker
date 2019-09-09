@@ -209,7 +209,7 @@ func (l *tarexporter) loadLayer(filename string, rootFS image.RootFS, id string,
 	if ds, ok := l.lss[os].(layer.DescribableStore); ok {
 		return ds.RegisterWithDescriptor(inflatedLayerData, rootFS.ChainID(), foreignSrc)
 	}
-	return l.lss[os].Register(inflatedLayerData, rootFS.ChainID())
+	return l.lss[os].Register(inflatedLayerData, rootFS.ChainID(), nil)
 }
 
 func (l *tarexporter) setLoadedTag(ref reference.Named, imgID digest.Digest, outStream io.Writer) error {

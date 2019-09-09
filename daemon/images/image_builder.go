@@ -96,7 +96,7 @@ func (l *rwLayer) Commit() (builder.ROLayer, error) {
 		chainID = parent.ChainID()
 	}
 
-	newLayer, err := l.layerStore.Register(stream, chainID)
+	newLayer, err := l.layerStore.Register(stream, chainID, nil)
 	if err != nil {
 		return nil, err
 	}
