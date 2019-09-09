@@ -6,3 +6,5 @@ require (
 	github.com/spf13/pflag v1.0.3
 	golang.org/x/tools v0.0.0-20180810170437-e96c4e24768d
 )
+
+go 1.13

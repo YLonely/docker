@@ -391,7 +391,8 @@ func (ed *extraStorageLayerDescriptor) Download(ctx context.Context, progressOut
 					// make a symbol link here
 					if err = os.Symlink(layerPathInExtra, layerPathInLocal); err == nil {
 						progress.Update(progressOutput, ed.ID(), "Download from extra complete")
-						return ioutils.NewReadCloserWrapper(strings.NewReader(diffID+":"+cacheID+":"+size), func() error { return nil }), int64(len(cacheID)), nil
+						res := diffID + ":" + cacheID + ":" + size
+						return ioutils.NewReadCloserWrapper(strings.NewReader(res), func() error { return nil }), int64(len(res)), nil
 					}
 					logrus.Warnf("cannot make symbol link for %s", layerPathInExtra)
 				}
@@ -607,7 +608,7 @@ func (p *v2Puller) pullSchema1(ctx context.Context, ref reference.Reference, unv
 		return "", "", fmt.Errorf("cannot download image with operating system %q when requesting %q", configOS, requestedOS)
 	}
 
-	resultRootFS, release, err := p.config.DownloadManager.Download(ctx, *rootFS, configOS, descriptors, p.config.ProgressOutput)
+	resultRootFS, release, err := p.config.DownloadManager.Download(ctx, *rootFS, configOS, descriptors, p.config.ProgressOutput, false)
 	if err != nil {
 		return "", "", err
 	}
@@ -645,6 +646,7 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 	var descriptors []xfer.DownloadDescriptor
 	var v2Descriptors []v2LayerDescriptor
 	var extraDescriptors []extraStorageLayerDescriptor
+	var fromExtraStorage bool //false
 
 	// Note that the order of this loop is in the direction of bottom-most
 	// to top-most, so that the downloads slice gets ordered correctly.
@@ -661,6 +663,7 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 	}
 
 	if p.config.ExtraPullConfig != nil {
+		fromExtraStorage = true
 		localRoot := p.config.ExtraPullConfig.Root
 		extraDir := p.config.ExtraPullConfig.ExtraStorageDir
 		driverName := p.config.ExtraPullConfig.DriverName
@@ -758,7 +761,7 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 				rootFS image.RootFS
 			)
 			downloadRootFS := *image.NewRootFS()
-			rootFS, release, err = p.config.DownloadManager.Download(ctx, downloadRootFS, layerStoreOS, descriptors, p.config.ProgressOutput)
+			rootFS, release, err = p.config.DownloadManager.Download(ctx, downloadRootFS, layerStoreOS, descriptors, p.config.ProgressOutput, fromExtraStorage)
 			if err != nil {
 				// Intentionally do not cancel the config download here
 				// as the error from config download (if there is one)
