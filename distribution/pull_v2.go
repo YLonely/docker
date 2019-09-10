@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/containerd/containerd/platforms"
@@ -358,7 +359,9 @@ func (ed *extraStorageLayerDescriptor) layerCacheIDPathInExtraDriver(cacheID str
 }
 
 func (ed *extraStorageLayerDescriptor) readFileFromExtraLayerdb(chainID layer.ChainID, fileName string) (string, error) {
-	filePath := filepath.Join(ed.extraStorageLayerdbPath(), "sha256", chainID.String(), fileName)
+	parts := strings.Split(chainID.String(), ":")
+	algo, id := parts[0], parts[1]
+	filePath := filepath.Join(ed.extraStorageLayerdbPath(), algo, id, fileName)
 	res, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		logrus.Warn(err)
@@ -391,8 +394,12 @@ func (ed *extraStorageLayerDescriptor) Download(ctx context.Context, progressOut
 					// make a symbol link here
 					if err = os.Symlink(layerPathInExtra, layerPathInLocal); err == nil {
 						progress.Update(progressOutput, ed.ID(), "Download from extra complete")
-						res := diffID + ":" + cacheID + ":" + size
-						return ioutils.NewReadCloserWrapper(strings.NewReader(res), func() error { return nil }), int64(len(res)), nil
+						res := diffID + "|" + cacheID + "|" + size
+						sizeNum, err := strconv.Atoi(size)
+						if err != nil {
+							sizeNum = 0
+						}
+						return ioutils.NewReadCloserWrapper(strings.NewReader(res), func() error { return nil }), int64(sizeNum), nil
 					}
 					logrus.Warnf("cannot make symbol link for %s", layerPathInExtra)
 				}
@@ -643,46 +650,6 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 		return target.Digest, manifestDigest, nil
 	}
 
-	var descriptors []xfer.DownloadDescriptor
-	var v2Descriptors []v2LayerDescriptor
-	var extraDescriptors []extraStorageLayerDescriptor
-	var fromExtraStorage bool //false
-
-	// Note that the order of this loop is in the direction of bottom-most
-	// to top-most, so that the downloads slice gets ordered correctly.
-	for _, d := range mfst.Layers {
-		layerDescriptor := v2LayerDescriptor{
-			digest:            d.Digest,
-			repo:              p.repo,
-			repoInfo:          p.repoInfo,
-			V2MetadataService: p.V2MetadataService,
-			src:               d,
-		}
-
-		v2Descriptors = append(v2Descriptors, layerDescriptor)
-	}
-
-	if p.config.ExtraPullConfig != nil {
-		fromExtraStorage = true
-		localRoot := p.config.ExtraPullConfig.Root
-		extraDir := p.config.ExtraPullConfig.ExtraStorageDir
-		driverName := p.config.ExtraPullConfig.DriverName
-		for _, l := range v2Descriptors {
-			ld := extraStorageLayerDescriptor{v2LayerDescriptor: l, localRoot: localRoot, extraStoragePath: extraDir, driverName: driverName}
-			extraDescriptors = append(extraDescriptors, ld)
-		}
-		if err := generateChainID(&extraDescriptors); err != nil {
-			return "", "", err
-		}
-		for i := range extraDescriptors {
-			descriptors = append(descriptors, &extraDescriptors[i])
-		}
-	} else {
-		for i := range v2Descriptors {
-			descriptors = append(descriptors, &v2Descriptors[i])
-		}
-	}
-
 	configChan := make(chan []byte, 1)
 	configErrChan := make(chan error, 1)
 	layerErrChan := make(chan error, 1)
@@ -703,9 +670,66 @@ func (p *v2Puller) pullSchema2(ctx context.Context, ref reference.Named, mfst *s
 	}()
 
 	var (
-		configJSON       []byte          // raw serialized image config
+		descriptors      []xfer.DownloadDescriptor
+		v2Descriptors    []v2LayerDescriptor
+		extraDescriptors []extraStorageLayerDescriptor
+		fromExtraStorage bool //false
+		configJSON       []byte
+		configRootFS     *image.RootFS
+	)
+	// Note that the order of this loop is in the direction of bottom-most
+	// to top-most, so that the downloads slice gets ordered correctly.
+	for _, d := range mfst.Layers {
+		layerDescriptor := v2LayerDescriptor{
+			digest:            d.Digest,
+			repo:              p.repo,
+			repoInfo:          p.repoInfo,
+			V2MetadataService: p.V2MetadataService,
+			src:               d,
+		}
+
+		v2Descriptors = append(v2Descriptors, layerDescriptor)
+	}
+
+	if p.config.ExtraPullConfig != nil {
+		fromExtraStorage = true
+		localRoot := p.config.ExtraPullConfig.Root
+		extraDir := p.config.ExtraPullConfig.ExtraStorageDir
+		driverName := p.config.ExtraPullConfig.DriverName
+		// if we pull from extra storage then we have to use diffID here to generate chainID
+		if configJSON == nil {
+			configJSON, configRootFS, _, err = receiveConfig(p.config.ImageStore, configChan, configErrChan)
+			if err == nil && configRootFS == nil {
+				err = errRootFSInvalid
+			}
+			if err != nil {
+				cancel()
+				return "", "", err
+			}
+		}
+		if len(v2Descriptors) != len(configRootFS.DiffIDs) {
+			err = errRootFSMismatch
+			return "", "", err
+		}
+		for i := range v2Descriptors {
+			ld := extraStorageLayerDescriptor{v2LayerDescriptor: v2Descriptors[i], localRoot: localRoot, extraStoragePath: extraDir, driverName: driverName}
+			ld.diffID = configRootFS.DiffIDs[i]
+			extraDescriptors = append(extraDescriptors, ld)
+		}
+		if err := generateChainID(extraDescriptors); err != nil {
+			return "", "", err
+		}
+		for i := range extraDescriptors {
+			descriptors = append(descriptors, &extraDescriptors[i])
+		}
+	} else {
+		for i := range v2Descriptors {
+			descriptors = append(descriptors, &v2Descriptors[i])
+		}
+	}
+
+	var (
 		downloadedRootFS *image.RootFS   // rootFS from registered layers
-		configRootFS     *image.RootFS   // rootFS from configuration
 		release          func()          // release resources from rootFS download
 		configPlatform   *specs.Platform // for LCOW when registering downloaded layers
 	)
@@ -1085,15 +1109,15 @@ func toOCIPlatform(p manifestlist.PlatformSpec) specs.Platform {
 	}
 }
 
-func generateChainID(descriptors *[]extraStorageLayerDescriptor) error {
+func generateChainID(descriptors []extraStorageLayerDescriptor) error {
 	rootFS := *image.NewRootFS()
-	for _, des := range *descriptors {
-		diffID, err := des.DiffID()
+	for i := range descriptors {
+		diffID, err := descriptors[i].DiffID()
 		if err != nil {
 			return err
 		}
 		rootFS.Append(diffID)
-		des.chainID = rootFS.ChainID()
+		descriptors[i].chainID = rootFS.ChainID()
 	}
 	return nil
 }

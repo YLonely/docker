@@ -311,7 +311,7 @@ func (ls *layerStore) registerWithDescriptor(ts io.Reader, parent ChainID, descr
 			logrus.Error("failed to read content from result")
 			return nil, err
 		}
-		parts := strings.Split(string(res), ":")
+		parts := strings.Split(string(res), "|")
 		diffID = DiffID(digest.Digest(parts[0]))
 		cacheID = parts[1]
 		layerSize, err = strconv.ParseInt(parts[2], 10, 64)

@@ -49,7 +49,9 @@ func getDefaultExecRoot() (string, error) {
 // the current process that are common across Unix platforms.
 func installUnixConfigFlags(conf *config.Config, flags *pflag.FlagSet) {
 	conf.Runtimes = make(map[string]types.Runtime)
+	conf.ExtraStorage = &types.ExtraStorageOptions{}
 
+	flags.Var(opts.NewExtraStorageOpt("extra-storage", conf.ExtraStorage), "add-extra-storage", "")
 	flags.StringVarP(&conf.SocketGroup, "group", "G", "docker", "Group for the unix socket")
 	flags.StringVar(&conf.BridgeConfig.IP, "bip", "", "Specify network bridge IP")
 	flags.StringVarP(&conf.BridgeConfig.Iface, "bridge", "b", "", "Attach containers to a network bridge")
