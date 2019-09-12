@@ -55,6 +55,7 @@ var flatOptions = map[string]bool{
 	"default-ulimits":    true,
 	"features":           true,
 	"builder":            true,
+	"extra-storage":      true,
 }
 
 // skipValidateOptions contains configuration keys
