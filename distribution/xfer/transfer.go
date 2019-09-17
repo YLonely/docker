@@ -38,12 +38,25 @@ type Watcher struct {
 type Transfer interface {
 	Watch(progressOutput progress.Output) *Watcher
 	Release(*Watcher)
+	ForceStop()
+	Priority() TransferPriority
 	Context() context.Context
 	Close()
 	Done() <-chan struct{}
 	Released() <-chan struct{}
 	Broadcast(masterProgressChan <-chan progress.Progress)
 }
+
+// TransferPriority indicate the priority of the transfer
+// when a transfer with higher priority is about to start but
+// another transfer is already exists, the lower one will be
+// stoped, and higher one will replace it.
+type TransferPriority int
+
+const (
+	TransferPriorityNormal TransferPriority = iota
+	TransferPriorityHigh
+)
 
 type transfer struct {
 	mu sync.Mutex
@@ -75,15 +88,18 @@ type transfer struct {
 	// a detaching watcher won't miss an event that was sent before it
 	// started detaching.
 	broadcastSyncChan chan struct{}
+
+	priority TransferPriority
 }
 
 // NewTransfer creates a new transfer.
-func NewTransfer() Transfer {
+func NewTransfer(priority TransferPriority) Transfer {
 	t := &transfer{
 		watchers:          make(map[chan struct{}]*Watcher),
 		running:           make(chan struct{}),
 		released:          make(chan struct{}),
 		broadcastSyncChan: make(chan struct{}),
+		priority:          priority,
 	}
 
 	// This uses context.Background instead of a caller-supplied context
@@ -201,6 +217,16 @@ func (t *transfer) Watch(progressOutput progress.Output) *Watcher {
 	return w
 }
 
+// ForceStop stop the transfer immediately
+func (t *transfer) ForceStop() {
+	t.cancel()
+}
+
+// Priority return t's priority
+func (t *transfer) Priority() TransferPriority {
+	return t.priority
+}
+
 // Release is the inverse of Watch; indicating that the watcher no longer wants
 // to be notified about the progress of the transfer. All calls to Watch must
 // be paired with later calls to Release so that the lifecycle of the transfer
@@ -269,7 +295,7 @@ func (t *transfer) Close() {
 // signals to the transfer manager that the job is no longer actively moving
 // data - for example, it may be waiting for a dependent transfer to finish.
 // This prevents it from taking up a slot.
-type DoFunc func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer
+type DoFunc func(progressChan chan<- progress.Progress, start <-chan struct{}, exit <-chan bool, inactive chan<- struct{}) Transfer
 
 // TransferManager is used by LayerDownloadManager and LayerUploadManager to
 // schedule and deduplicate transfers. It is up to the TransferManager
@@ -313,12 +339,31 @@ func (tm *transferManager) SetConcurrency(concurrency int) {
 func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressOutput progress.Output) (Transfer, *Watcher) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	var xfer Transfer
+
+	start := make(chan struct{})
+	inactive := make(chan struct{})
+	exit := make(chan bool)
+	defer close(exit)
+
+	masterProgressChan := make(chan progress.Progress)
+	xferToStart := xferFunc(masterProgressChan, start, exit, inactive)
 
 	for {
-		xfer, present := tm.transfers[key]
+		oldXfer, present := tm.transfers[key]
 		if !present {
+			xfer = xferToStart
+			break
+		} else if oldXfer.Priority() >= xferToStart.Priority() {
+			xfer = oldXfer
+			exit <- true
+		} else {
+			oldXfer.ForceStop()
+			delete(tm.transfers, key)
+			xfer = xferToStart
 			break
 		}
+
 		// Transfer is already in progress.
 		watcher := xfer.Watch(progressOutput)
 
@@ -343,8 +388,8 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressOutput 
 		}
 	}
 
-	start := make(chan struct{})
-	inactive := make(chan struct{})
+	// xfer should start
+	exit <- false
 
 	if tm.concurrencyLimit == 0 || tm.activeTransfers < tm.concurrencyLimit {
 		close(start)
@@ -352,9 +397,6 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressOutput 
 	} else {
 		tm.waitingTransfers = append(tm.waitingTransfers, start)
 	}
-
-	masterProgressChan := make(chan progress.Progress)
-	xfer := xferFunc(masterProgressChan, start, inactive)
 	watcher := xfer.Watch(progressOutput)
 	go xfer.Broadcast(masterProgressChan)
 	tm.transfers[key] = xfer
@@ -373,7 +415,13 @@ func (tm *transferManager) Transfer(key string, xferFunc DoFunc, progressOutput 
 				if inactive != nil {
 					tm.inactivate(start)
 				}
-				delete(tm.transfers, key)
+				xferTmp, ok := tm.transfers[key]
+				if ok {
+					// the old xfer may have been deleted by other xfer with higher priority
+					if xferTmp.Priority() == xfer.Priority() {
+						delete(tm.transfers, key)
+					}
+				}
 				tm.mu.Unlock()
 				xfer.Close()
 				return

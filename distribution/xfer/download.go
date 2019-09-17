@@ -224,9 +224,13 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 // on top of parentDownload's resulting layer. Otherwise, it registers the
 // layer on top of the ChainID given by parentLayer.
 func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor, parentLayer layer.ChainID, parentDownload *downloadTransfer, os string, fromExtraStorage bool) DoFunc {
-	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
+	return func(progressChan chan<- progress.Progress, start <-chan struct{}, exit <-chan bool, inactive chan<- struct{}) Transfer {
+		priority := TransferPriorityNormal
+		if fromExtraStorage {
+			priority = TransferPriorityHigh
+		}
 		d := &downloadTransfer{
-			Transfer:   NewTransfer(),
+			Transfer:   NewTransfer(priority),
 			layerStore: ldm.layerStores[os],
 		}
 
@@ -236,6 +240,13 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 			}()
 
 			progressOutput := progress.ChanOutput(progressChan)
+
+			select {
+			case shouldExit := <-exit:
+				if shouldExit {
+					return
+				}
+			}
 
 			select {
 			case <-start:
@@ -393,9 +404,13 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 // interfere with the progress reporting for sourceDownload, which has the same
 // Key.
 func (ldm *LayerDownloadManager) makeDownloadFuncFromDownload(descriptor DownloadDescriptor, sourceDownload *downloadTransfer, parentDownload *downloadTransfer, os string, fromExtraStorage bool) DoFunc {
-	return func(progressChan chan<- progress.Progress, start <-chan struct{}, inactive chan<- struct{}) Transfer {
+	return func(progressChan chan<- progress.Progress, start <-chan struct{}, exit <-chan bool, inactive chan<- struct{}) Transfer {
+		priority := TransferPriorityNormal
+		if fromExtraStorage {
+			priority = TransferPriorityHigh
+		}
 		d := &downloadTransfer{
-			Transfer:   NewTransfer(),
+			Transfer:   NewTransfer(priority),
 			layerStore: ldm.layerStores[os],
 		}
 
@@ -403,6 +418,13 @@ func (ldm *LayerDownloadManager) makeDownloadFuncFromDownload(descriptor Downloa
 			defer func() {
 				close(progressChan)
 			}()
+
+			select {
+			case shouldExit := <-exit:
+				if shouldExit {
+					return
+				}
+			}
 
 			<-start
 
