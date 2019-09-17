@@ -30,6 +30,10 @@ File structure of extra storage dir should be like the one below
 
 It's easy to create a required extra storage structure, you can just copy the `image` and `overlay2` from `/var/lib/docker/`.
 
+## Docker-cli
+
+Here is a modified docker cli which works with docker-extra [docker-extra-cli](https://github.com/kubesys/docker-extra-cli)
+
 ## Kubernetes
 
-There is also a modified Kubernetes which works properly with docker-extra
+There is also a modified Kubernetes which works properly with docker-extra [kubernetes-extra](https://github.com/kubesys/kubernetes-extra)
