@@ -109,6 +109,9 @@ func (lum *LayerUploadManager) makeUploadFunc(descriptor UploadDescriptor) DoFun
 		}
 
 		go func() {
+
+			<-exit // do not block
+
 			defer func() {
 				close(progressChan)
 			}()
