@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/docker/distribution"
@@ -285,6 +286,12 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 
 			for {
 				downloadReader, size, err = descriptor.Download(d.Transfer.Context(), progressOutput)
+				if err != nil && strings.HasPrefix(err.Error(), "falling back to registry") {
+					if registerOpts != nil {
+						registerOpts.ExtraStorageLayer = false
+					}
+					err = nil
+				}
 				if err == nil {
 					break
 				}
@@ -406,9 +413,6 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 func (ldm *LayerDownloadManager) makeDownloadFuncFromDownload(descriptor DownloadDescriptor, sourceDownload *downloadTransfer, parentDownload *downloadTransfer, os string, fromExtraStorage bool) DoFunc {
 	return func(progressChan chan<- progress.Progress, start <-chan struct{}, exit <-chan bool, inactive chan<- struct{}) Transfer {
 		priority := TransferPriorityNormal
-		if fromExtraStorage {
-			priority = TransferPriorityHigh
-		}
 		d := &downloadTransfer{
 			Transfer:   NewTransfer(priority),
 			layerStore: ldm.layerStores[os],

@@ -40,8 +40,9 @@ import (
 )
 
 var (
-	errRootFSMismatch = errors.New("layers from manifest don't match image configuration")
-	errRootFSInvalid  = errors.New("invalid rootfs in image configuration")
+	errRootFSMismatch        = errors.New("layers from manifest don't match image configuration")
+	errRootFSInvalid         = errors.New("invalid rootfs in image configuration")
+	ErrFallingBackToRegistry = errors.New("falling back to registry")
 )
 
 // ImageConfigPullError is an error pulling the image config blob
@@ -409,7 +410,11 @@ func (ed *extraStorageLayerDescriptor) Download(ctx context.Context, progressOut
 	}
 	logrus.Warn("fall back to pulling from registry")
 	progress.Update(progressOutput, ed.ID(), "Falling back to registry")
-	return ed.v2LayerDescriptor.Download(ctx, progressOutput)
+	rc, size, err := ed.v2LayerDescriptor.Download(ctx, progressOutput)
+	if err == nil {
+		err = ErrFallingBackToRegistry
+	}
+	return rc, size, err
 }
 
 func (p *v2Puller) pullV2Tag(ctx context.Context, ref reference.Named, platform *specs.Platform) (tagUpdated bool, err error) {
