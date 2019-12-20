@@ -1,57 +1,55 @@
-The Moby Project
-================
+# Docker-Extra
 
-![Moby Project logo](docs/static_files/moby-project-logo.png "The Moby Project")
+The docker-extra branch is based on [moby](https://github.com/moby/moby) project, it modifies the code to allow docker pull from a extra image storage when downloading images.
 
-Moby is an open-source project created by Docker to enable and accelerate software containerization.
+Download the package from [release](https://github.com/kubesys/kubeext-extra/releases) page.
 
-It provides a "Lego set" of toolkit components, the framework for assembling them into custom container-based systems, and a place for all container enthusiasts and professionals to experiment and exchange ideas.
-Components include container build tools, a container registry, orchestration tools, a runtime and more, and these can be used as building blocks in conjunction with other tools and projects.
+## Introduction
 
-## Principles
+Pulling a big image from remote registry can be very slow, while a container only needs a little data to boot up accroding to some expriments, so it's effcient that docker have the access to some extra image layer storage, e.g. NFS layer storage, which stores uncompressed image data, then a container can be started just upon the layer storage and the data is requested through wire in a so called "Lazy" way.
 
-Moby is an open project guided by strong principles, aiming to be modular, flexible and without too strong an opinion on user experience.
-It is open to the community to help set its direction.
+docker-extra project provides a way to allow docker work with those extra (may be shared) storage, which speed up the creation of container.
 
-- Modular: the project includes lots of components that have well-defined functions and APIs that work together.
-- Batteries included but swappable: Moby includes enough components to build fully featured container system, but its modular architecture ensures that most of the components can be swapped by different implementations.
-- Usable security: Moby provides secure defaults without compromising usability.
-- Developer focused: The APIs are intended to be functional and useful to build powerful tools.
-They are not necessarily intended as end user tools but as components aimed at developers.
-Documentation and UX is aimed at developers not end users.
+## Features
 
-## Audience
+We add some other options to dockerd's config file (/etc/docker/daemon.json):
+```json
+{
+    "extra-storage":{
+        "path":"path-to-the-extra-storage-dir-on-host[default:/var/lib/docker/extra]",
+        "device":"path-to-the-device-to-be-mount-on-path",
+        "type":"mount-type"
+    }
+}
+```
+If the extra storage is just a dir on host, then the `path` option is enough. If the extra storage is intalled as a device and should be mount on the dir `path`, users should specify the path of the device (e.g. /dev/sdb0) and also the type of the file system (e.g. ext4)
 
-The Moby Project is intended for engineers, integrators and enthusiasts looking to modify, hack, fix, experiment, invent and build systems based on containers.
-It is not for people looking for a commercially supported system, but for people who want to work and learn with open source code.
+Once the extra-storage is ready, you can pull the image from extra storage with a "-extra" or "extra" flag at the end of the image tag. For example, pulling centos7 from extra storage:
+```
+docker pull centos:7-extra
+```
+or pulling the latest version of ubuntu from extra storage:
+```
+docker pull ubuntu:extra
+```
 
-## Relationship with Docker
+## Extra Storage Requirment
 
-The components and tools in the Moby Project are initially the open source components that Docker and the community have built for the Docker Project.
-New projects can be added if they fit with the community goals. Docker is committed to using Moby as the upstream for the Docker Product.
-However, other projects are also encouraged to use Moby as an upstream, and to reuse the components in diverse ways, and all these uses will be treated in the same way. External maintainers and contributors are welcomed.
+File structure of extra storage dir should be like the one below
 
-The Moby project is not intended as a location for support or feature requests for Docker products, but as a place for contributors to work on open source code, fix bugs, and make the code more useful.
-The releases are supported by the maintainers, community and users, on a best efforts basis only, and are not intended for customers who want enterprise or commercial support; Docker EE is the appropriate product for these use cases.
+![file-structure](docs/img/file-structure.png)
 
------
+It's easy to create a required extra storage structure, you can just copy the `image` and `overlay2` from `/var/lib/docker/`.
 
-Legal
-=====
+## Build
 
-*Brought to you courtesy of our legal counsel. For more context,
-please see the [NOTICE](https://github.com/moby/moby/blob/master/NOTICE) document in this repo.*
+Merge all the code changes in `diff` or use fils in `full` to replace the corresponding files in projcet, then follow the steps [here](https://github.com/YLonely/docker/blob/master/docs/contributing/set-up-dev-env.md) to build this project.
 
-Use and transfer of Moby may be subject to certain restrictions by the
-United States and other governments.
+## Build rpm packages
 
-It is your responsibility to ensure that your use and/or transfer does not
-violate applicable laws.
-
-For more information, please see https://www.bis.doc.gov
-
-Licensing
-=========
-Moby is licensed under the Apache License, Version 2.0. See
-[LICENSE](https://github.com/moby/moby/blob/master/LICENSE) for the full
-license text.
+1. clone `docker-ce-packaging` project
+```
+git clone https://github.com/docker/docker-ce-packaging.git
+```
+2. enter subdir `rpm` of `docker-ce-packaging`
+3. follow the steps [here](https://github.com/docker/docker-ce-packaging/tree/master/rpm) to create rpm packages for docker.
