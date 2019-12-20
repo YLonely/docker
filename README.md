@@ -37,7 +37,7 @@ docker pull ubuntu:extra
 
 File structure of extra storage dir should be like the one below
 
-![file-structure](docs/img/file-structure.png)
+![file-structure](docs/static_files/file-structure.png)
 
 It's easy to create a required extra storage structure, you can just copy the `image` and `overlay2` from `/var/lib/docker/`.
 
